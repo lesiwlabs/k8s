@@ -13,10 +13,6 @@ import (
 const host = "188.245.162.205"
 
 var rnr, k8s, ctl *cmdio.Runner
-var sshkey string
-
-//go:embed autopatch.sh
-var autopatch string
 
 const autopatchCron = `0 2 * * 6 root /usr/local/bin/autopatch 2>&1 ` +
 	`>> /var/log/autopatch.log`
@@ -39,8 +35,14 @@ func run() error {
 	if err := installCNPG(); err != nil {
 		return err
 	}
+	if err := installPGCluster(); err != nil {
+		return err
+	}
 	return nil
 }
+
+//go:embed autopatch.sh
+var autopatch string
 
 func installAutopatch() error {
 	_, err := cmdio.GetPipe(
@@ -80,11 +82,30 @@ func updateK3s() error {
 }
 
 func installCNPG() error {
-	err := k8s.Run("kubectl", "apply", "-f",
+	err := ctl.Run(
+		"apply",
+		"--server-side",     // github.com/cloudnative-pg/charts/issues/325
+		"--force-conflicts", // necessary to install over existing versions
+		"-f",
 		"https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg"+
-			"/release-1.17/releases/cnpg-1.17.5.yaml")
+			"/release-1.25/releases/cnpg-1.25.0.yaml",
+	)
 	if err != nil {
 		return fmt.Errorf("could not install CNPG: %w", err)
+	}
+	return nil
+}
+
+//go:embed cluster.yml
+var clusterCfg string
+
+func installPGCluster() error {
+	err := cmdio.Pipe(
+		strings.NewReader(clusterCfg),
+		ctl.Command("apply", "-f", "-"),
+	)
+	if err != nil {
+		return fmt.Errorf("could not install PG cluster: %w", err)
 	}
 	return nil
 }

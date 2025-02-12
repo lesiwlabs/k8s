@@ -51,13 +51,9 @@ func runinit() (err error) {
 	if _, err := file.WriteString(r.Out + "\n"); err != nil {
 		return fmt.Errorf("could not write to temp file: %w", err)
 	}
-	sshkey = file.Name()
+	sshkey := file.Name()
 
-	k8s = sub.WithRunner(
-		rnr, "ssh",
-		"-i", sshkey,
-		host, "--",
-	)
+	k8s = sub.WithRunner(rnr, "ssh", "-i", sshkey, host, "--")
 	ctl = sub.WithRunner(k8s, "kubectl")
 
 	return nil
