@@ -33,9 +33,9 @@ func runinit() (err error) {
 			return fmt.Errorf("could not find spkez: %w", err)
 		}
 	}
-	spkez := r.Out
+	spkez = sub.WithRunner(rnr, r.Out)
 
-	r, err = rnr.Get(spkez, "get", "infra/ssh")
+	r, err = spkez.Get("get", "infra/ssh")
 	if err != nil {
 		return fmt.Errorf("could not get ssh key: %w", err)
 	}
