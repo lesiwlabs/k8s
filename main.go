@@ -3,6 +3,7 @@ package main
 import (
 	_ "embed"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -170,9 +171,13 @@ func setupContainerRegistry() error {
 	if err != nil {
 		return fmt.Errorf("could not get registry auth secret: %w", err)
 	}
+	var (
+		reguser = "ll"
+		regpass = r.Out
+	)
 	err = cmdio.Pipe(
 		strings.NewReader(fmt.Sprintf(
-			basicAuthCfg, "registry-auth-secret", "ll", r.Out,
+			basicAuthCfg, "registry-auth-secret", reguser, regpass,
 		)),
 		ctl.Command("apply", "-f", "-"),
 	)
@@ -186,5 +191,19 @@ func setupContainerRegistry() error {
 	if err != nil {
 		return fmt.Errorf("could not install registry: %w", err)
 	}
+
+	trace := cmdio.Trace
+	defer func() { cmdio.Trace = trace }()
+	cmdio.Trace = io.Discard // Hide the registry secret.
+	err = ctl.Run(
+		"create", "secret", "docker-registry", "regcred",
+		"--docker-server=ctr.lesiw.dev",
+		"--docker-username="+reguser,
+		"--docker-password="+regpass,
+	)
+	if err != nil {
+		return fmt.Errorf("could not store registry secret: %w", err)
+	}
+	cmdio.Trace = trace
 	return nil
 }
