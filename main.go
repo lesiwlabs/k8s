@@ -10,7 +10,7 @@ import (
 	"lesiw.io/defers"
 )
 
-const host = "188.245.162.205"
+const host = "k8s.lesiw.dev"
 
 var rnr, k8s, ctl, spkez *cmdio.Runner
 
@@ -37,6 +37,9 @@ func run() error {
 	}
 	if err := setupCertManager(); err != nil {
 		return fmt.Errorf("failed to set up cert-manager: %w", err)
+	}
+	if err := setupContainerRegistry(); err != nil {
+		return fmt.Errorf("failed to setup container registry: %w", err)
 	}
 	return nil
 }
@@ -146,6 +149,42 @@ func setupCertManager() error {
 	)
 	if err != nil {
 		return fmt.Errorf("could not create cloudflare issuer: %w", err)
+	}
+	return nil
+}
+
+//go:embed registry.yml
+var registryCfg string
+
+const basicAuthCfg = `apiVersion: v1
+kind: Secret
+metadata:
+  name: %s
+type: kubernetes.io/basic-auth
+stringData:
+  username: %s
+  password: %s`
+
+func setupContainerRegistry() error {
+	r, err := spkez.Get("get", "ctr.lesiw.dev/auth")
+	if err != nil {
+		return fmt.Errorf("could not get registry auth secret: %w", err)
+	}
+	err = cmdio.Pipe(
+		strings.NewReader(fmt.Sprintf(
+			basicAuthCfg, "registry-auth-secret", "ll", r.Out,
+		)),
+		ctl.Command("apply", "-f", "-"),
+	)
+	if err != nil {
+		return fmt.Errorf("could not store registry auth secret: %w", err)
+	}
+	err = cmdio.Pipe(
+		strings.NewReader(registryCfg),
+		ctl.Command("apply", "-f", "-"),
+	)
+	if err != nil {
+		return fmt.Errorf("could not install registry: %w", err)
 	}
 	return nil
 }
