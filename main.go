@@ -115,7 +115,7 @@ metadata:
   name: %s
 type: Opaque
 stringData:
-  api-key: %s`
+  %s: %s`
 
 //go:embed issuer.yml
 var issuerCfg string
@@ -136,7 +136,7 @@ func setupCertManager() error {
 	}
 	err = cmdio.Pipe(
 		strings.NewReader(fmt.Sprintf(
-			secretCfg, "cert-manager-cloudflare-token", r.Out,
+			secretCfg, "cert-manager-cloudflare-token", "api-token", r.Out,
 		)),
 		ctl.Command("apply", "-f", "-"),
 	)
