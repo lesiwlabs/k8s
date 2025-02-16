@@ -171,10 +171,7 @@ func setupContainerRegistry() error {
 	if err != nil {
 		return fmt.Errorf("could not get registry auth secret: %w", err)
 	}
-	var (
-		reguser = "ll"
-		regpass = r.Out
-	)
+	reguser, regpass := "ll", r.Out
 	err = cmdio.Pipe(
 		strings.NewReader(fmt.Sprintf(
 			basicAuthCfg, "registry-auth-secret", reguser, regpass,
