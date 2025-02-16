@@ -57,6 +57,10 @@ metadata:
     traefik.ingress.kubernetes.io/frontend.entryPoints.websecure: websecure
     traefik.ingress.kubernetes.io/router.middlewares: default-registry-auth@kubernetescrd
 spec:
+  tls:
+    - hosts:
+      - ctr.lesiw.dev
+      secretName: tls-ctr.lesiw.dev
   rules:
     - host: ctr.lesiw.dev
       http:
