@@ -33,6 +33,9 @@ func run() error {
 	if err := updateK3s(); err != nil {
 		return fmt.Errorf("failed to install or update k3s: %w", err)
 	}
+	if err := setupTraefik(); err != nil {
+		return fmt.Errorf("failed to set up traefik: %w", err)
+	}
 	if err := setupPostgres(); err != nil {
 		return fmt.Errorf("failed to set up postgres: %w", err)
 	}
@@ -83,6 +86,22 @@ func updateK3s() error {
 		return fmt.Errorf("could not update k3s: %w", err)
 	}
 	return nil
+}
+
+//go:embed traefik.yml
+var traefikConfig string
+
+func setupTraefik() error {
+	// k3s comes with traefik already installed.
+	// This function applies configuration to the existing installation.
+	err := cmdio.Pipe(
+		strings.NewReader(traefikConfig),
+		ctl.Command("apply", "-f", "-"),
+	)
+	if err != nil {
+		return fmt.Errorf("could not configure traefik: %w", err)
+	}
+	return err
 }
 
 //go:embed cluster.yml
