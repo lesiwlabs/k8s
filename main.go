@@ -189,18 +189,21 @@ func setupContainerRegistry() error {
 		return fmt.Errorf("could not install registry: %w", err)
 	}
 
-	trace := cmdio.Trace
-	defer func() { cmdio.Trace = trace }()
-	cmdio.Trace = io.Discard // Hide the registry secret.
-	err = ctl.Run(
-		"create", "secret", "docker-registry", "regcred",
-		"--docker-server=ctr.lesiw.dev",
-		"--docker-username="+reguser,
-		"--docker-password="+regpass,
-	)
+	err = ctl.Run("get", "secret", "regcred")
 	if err != nil {
-		return fmt.Errorf("could not store registry secret: %w", err)
+		trace := cmdio.Trace
+		defer func() { cmdio.Trace = trace }()
+		cmdio.Trace = io.Discard // Hide the registry secret.
+		err = ctl.Run(
+			"create", "secret", "docker-registry", "regcred",
+			"--docker-server=ctr.lesiw.dev",
+			"--docker-username="+reguser,
+			"--docker-password="+regpass,
+		)
+		if err != nil {
+			return fmt.Errorf("could not store registry secret: %w", err)
+		}
+		cmdio.Trace = trace
 	}
-	cmdio.Trace = trace
 	return nil
 }
