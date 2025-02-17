@@ -32,6 +32,9 @@ spec:
         volumeMounts:
         - mountPath: /var/lib/registry
           name: registry-storage
+        env:
+        - name: REGISTRY_STORAGE_DELETE_ENABLED
+          value: "true"
       volumes:
       - name: registry-storage
         persistentVolumeClaim:
