@@ -15,8 +15,8 @@ const host = "k8s.lesiw.dev"
 
 var rnr, k8s, ctl, spkez *cmdio.Runner
 
-const autopatchCron = `0 2 * * 6 root /usr/local/bin/autopatch 2>&1 ` +
-	`>> /var/log/autopatch.log
+const autopatchCron = `0 2 * * 6 root /usr/local/bin/autopatch >> ` +
+	`/var/log/autopatch.log 2>&1
 `
 
 func main() {
