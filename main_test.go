@@ -50,10 +50,10 @@ func TestInstallAutopatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(/etc/cron.d/autopatch) err: %v", err)
 	}
-	if want := autopatchCron; string(got) != want {
+	if !bytes.Equal(got, autopatchCron) {
 		t.Errorf(
 			"ReadFile(/etc/cron.d/autopatch):\n%s",
-			cmp.Diff(want, string(got)),
+			cmp.Diff(autopatchCron, got),
 		)
 	}
 }

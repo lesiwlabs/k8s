@@ -83,9 +83,9 @@ var getCtl = sync.OnceValues(func() (command.Machine, error) {
 	return sub.Machine(k8s, "kubectl"), nil
 })
 
-const autopatchCron = `0 2 * * 6 root /usr/local/bin/autopatch >> ` +
+var autopatchCron = []byte(`0 2 * * 6 root /usr/local/bin/autopatch >> ` +
 	`/var/log/autopatch.log 2>&1
-`
+`)
 
 func main() {
 	defer defers.Run()
@@ -141,7 +141,7 @@ func installAutopatch(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("could not install autopatch: %w", err)
 	}
-	err = k8s.WriteFile(ctx, "/etc/cron.d/autopatch", []byte(autopatchCron))
+	err = k8s.WriteFile(ctx, "/etc/cron.d/autopatch", autopatchCron)
 	if err != nil {
 		return fmt.Errorf("could not install autopatch cron job: %w", err)
 	}
