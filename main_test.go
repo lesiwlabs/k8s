@@ -155,9 +155,8 @@ func TestSetupPostgres(t *testing.T) {
 }
 
 func TestSetupCertManager(t *testing.T) {
-	ctl := mock.New()
-	spkez := mock.New()
-	spkez.Return("get", "fake-cloudflare-token\n")
+	ctl, spkez := mock.New(), mock.New()
+	spkez.Return(strings.NewReader("fake-cloudflare-token\n"), "get")
 	swap(t, &getCtl, func() (command.Machine, error) { return ctl, nil })
 	swap(t, &getSpkez, func() (command.Machine, error) { return spkez, nil })
 
@@ -214,9 +213,8 @@ func TestSetupCertManager(t *testing.T) {
 }
 
 func TestSetupContainerRegistry(t *testing.T) {
-	ctl := mock.New()
-	spkez := mock.New()
-	spkez.Return("get", "fake-registry-password\n")
+	ctl, spkez := mock.New(), mock.New()
+	spkez.Return(strings.NewReader("fake-registry-password\n"), "get")
 	swap(t, &getCtl, func() (command.Machine, error) { return ctl, nil })
 	swap(t, &getSpkez, func() (command.Machine, error) { return spkez, nil })
 
