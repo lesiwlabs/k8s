@@ -15,19 +15,16 @@ import (
 	"lesiw.io/command/sys"
 	"lesiw.io/defers"
 	"lesiw.io/fs"
+	"lesiw.io/fs/osfs"
 )
 
 const host = "k8s.lesiw.dev"
 
 var getSpkez = sync.OnceValues(func() (command.Machine, error) {
-	ctx := context.Background()
-	sh := command.Shell(sys.Machine())
-
-	// Register commands needed during initialization
+	ctx, sh := context.Background(), command.Shell(sys.Machine())
 	sh.Handle("go", sh.Unshell())
 	sh.Handle("spkez", sh.Unshell())
 
-	// Check if spkez is installed; install if not found
 	_, err := sh.Call(ctx, "spkez", "--version")
 	if command.NotFound(err) {
 		fmt.Println("Installing spkez...")
@@ -39,13 +36,11 @@ var getSpkez = sync.OnceValues(func() (command.Machine, error) {
 		return nil, fmt.Errorf("error checking spkez: %w", err)
 	}
 
-	// spkez is just a command prefix, not a full shell
 	return sub.Machine(sh, "spkez"), nil
 })
 
 var getK8s = sync.OnceValues(func() (*command.Sh, error) {
-	ctx := context.Background()
-	sh := command.Shell(sys.Machine())
+	ctx, sh := context.Background(), command.Shell(sys.Machine())
 	sh.Handle("ssh", sh.Unshell())
 
 	spkez, err := getSpkez()
@@ -57,23 +52,23 @@ var getK8s = sync.OnceValues(func() (*command.Sh, error) {
 	if err != nil {
 		return nil, fmt.Errorf("could not get ssh key: %w", err)
 	}
-	file, err := os.CreateTemp("", "sshkey")
-	if err != nil {
-		return nil, fmt.Errorf("could not create temp file: %w", err)
-	}
-	defers.Add(func() { _ = os.Remove(file.Name()) })
-	defer file.Close()
-	if err := os.Chmod(file.Name(), 0600); err != nil {
-		return nil, fmt.Errorf(
-			"could not set permissions on temp file: %w", err,
-		)
-	}
-	if _, err := file.WriteString(sshkey + "\n"); err != nil {
-		return nil, fmt.Errorf("could not write to temp file: %w", err)
-	}
-	sshkeyPath := file.Name()
 
-	k8s := command.Shell(sub.Machine(sh, "ssh", "-i", sshkeyPath, host, "--"))
+	tmpfs := osfs.TempFS()
+	defers.Add(func() { _ = fs.Close(tmpfs) })
+
+	err = fs.WriteFile(fs.WithFileMode(ctx, 0600),
+		tmpfs, "key", []byte(sshkey+"\n"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("could not write ssh key: %w", err)
+	}
+
+	absPath, err := fs.Abs(ctx, tmpfs, "key")
+	if err != nil {
+		return nil, fmt.Errorf("could not get absolute path: %w", err)
+	}
+
+	k8s := command.Shell(sub.Machine(sh, "ssh", "-i", absPath, host, "--"))
 	k8s.Handle("sh", k8s.Unshell())
 	k8s.Handle("curl", k8s.Unshell())
 	k8s.Handle("kubectl", k8s.Unshell())
@@ -85,8 +80,6 @@ var getCtl = sync.OnceValues(func() (command.Machine, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	// kubectl is just a command prefix, not a full shell
 	return sub.Machine(k8s, "kubectl"), nil
 })
 
@@ -151,10 +144,6 @@ func installAutopatch(ctx context.Context) error {
 	err = k8s.WriteFile(ctx, "/etc/cron.d/autopatch", []byte(autopatchCron))
 	if err != nil {
 		return fmt.Errorf("could not install autopatch cron job: %w", err)
-	}
-	err = k8s.WriteFile(ctx, "/var/log/autopatch.log", []byte{})
-	if err != nil {
-		return fmt.Errorf("could not create autopatch log: %w", err)
 	}
 	return nil
 }

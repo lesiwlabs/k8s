@@ -7,17 +7,21 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"lesiw.io/command"
 	"lesiw.io/command/mock"
+	"lesiw.io/fs"
 )
+
+func swap[T any](t *testing.T, orig *T, with T) {
+	t.Helper()
+	o := *orig
+	t.Cleanup(func() { *orig = o })
+	*orig = with
+}
 
 func TestInstallAutopatch(t *testing.T) {
 	sh := command.Shell(mock.New())
+	swap(t, &getK8s, func() (*command.Sh, error) { return sh, nil })
 
-	getK8s = func() (*command.Sh, error) {
-		return sh, nil
-	}
-
-	err := installAutopatch(t.Context())
-	if err != nil {
+	if err := installAutopatch(t.Context()); err != nil {
 		t.Fatalf("installAutopatch() err: %v", err)
 	}
 
@@ -32,6 +36,13 @@ func TestInstallAutopatch(t *testing.T) {
 			cmp.Diff(want, string(got)),
 		)
 	}
+	info, err := sh.Stat(t.Context(), "/usr/local/bin/autopatch")
+	if err != nil {
+		t.Fatalf("Stat(/usr/local/bin/autopatch) err: %v", err)
+	}
+	if got, want := info.Mode().Perm(), fs.Mode(0755); got != want {
+		t.Errorf("autopatch mode = %04o, want %04o", got, want)
+	}
 
 	// Verify cron job was written
 	got, err = sh.ReadFile(t.Context(), "/etc/cron.d/autopatch")
@@ -44,31 +55,15 @@ func TestInstallAutopatch(t *testing.T) {
 			cmp.Diff(want, string(got)),
 		)
 	}
-
-	// Verify log file was created
-	got, err = sh.ReadFile(t.Context(), "/var/log/autopatch.log")
-	if err != nil {
-		t.Fatalf("ReadFile(/var/log/autopatch.log) err: %v", err)
-	}
-	if want := ""; string(got) != want {
-		t.Errorf(
-			"ReadFile(/var/log/autopatch.log) = %q, want empty",
-			got,
-		)
-	}
 }
 
 func TestUpdateK3s(t *testing.T) {
 	sh := command.Shell(mock.New())
 	sh.Handle("curl", sh.Unshell())
 	sh.Handle("sh", sh.Unshell())
+	swap(t, &getK8s, func() (*command.Sh, error) { return sh, nil })
 
-	getK8s = func() (*command.Sh, error) {
-		return sh, nil
-	}
-
-	err := updateK3s(t.Context())
-	if err != nil {
+	if err := updateK3s(t.Context()); err != nil {
 		t.Fatalf("updateK3s() err: %v", err)
 	}
 
@@ -97,13 +92,9 @@ func TestUpdateK3s(t *testing.T) {
 
 func TestSetupTraefik(t *testing.T) {
 	ctl := mock.New()
+	swap(t, &getCtl, func() (command.Machine, error) { return ctl, nil })
 
-	getCtl = func() (command.Machine, error) {
-		return ctl, nil
-	}
-
-	err := setupTraefik(t.Context())
-	if err != nil {
+	if err := setupTraefik(t.Context()); err != nil {
 		t.Fatalf("setupTraefik() err: %v", err)
 	}
 
@@ -126,13 +117,9 @@ func TestSetupTraefik(t *testing.T) {
 
 func TestSetupPostgres(t *testing.T) {
 	ctl := mock.New()
+	swap(t, &getCtl, func() (command.Machine, error) { return ctl, nil })
 
-	getCtl = func() (command.Machine, error) {
-		return ctl, nil
-	}
-
-	err := setupPostgres(t.Context())
-	if err != nil {
+	if err := setupPostgres(t.Context()); err != nil {
 		t.Fatalf("setupPostgres() err: %v", err)
 	}
 
@@ -169,17 +156,11 @@ func TestSetupPostgres(t *testing.T) {
 func TestSetupCertManager(t *testing.T) {
 	ctl := mock.New()
 	spkez := mock.New()
-	spkez.Queue("get", "fake-cloudflare-token\n")
+	spkez.Return("get", "fake-cloudflare-token\n")
+	swap(t, &getCtl, func() (command.Machine, error) { return ctl, nil })
+	swap(t, &getSpkez, func() (command.Machine, error) { return spkez, nil })
 
-	getCtl = func() (command.Machine, error) {
-		return ctl, nil
-	}
-	getSpkez = func() (command.Machine, error) {
-		return spkez, nil
-	}
-
-	err := setupCertManager(t.Context())
-	if err != nil {
+	if err := setupCertManager(t.Context()); err != nil {
 		t.Fatalf("setupCertManager() err: %v", err)
 	}
 
@@ -234,17 +215,11 @@ func TestSetupCertManager(t *testing.T) {
 func TestSetupContainerRegistry(t *testing.T) {
 	ctl := mock.New()
 	spkez := mock.New()
-	spkez.Queue("get", "fake-registry-password\n")
+	spkez.Return("get", "fake-registry-password\n")
+	swap(t, &getCtl, func() (command.Machine, error) { return ctl, nil })
+	swap(t, &getSpkez, func() (command.Machine, error) { return spkez, nil })
 
-	getCtl = func() (command.Machine, error) {
-		return ctl, nil
-	}
-	getSpkez = func() (command.Machine, error) {
-		return spkez, nil
-	}
-
-	err := setupContainerRegistry(t.Context())
-	if err != nil {
+	if err := setupContainerRegistry(t.Context()); err != nil {
 		t.Fatalf("setupContainerRegistry() err: %v", err)
 	}
 
