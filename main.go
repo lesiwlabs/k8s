@@ -126,7 +126,7 @@ func run(ctx context.Context) error {
 }
 
 //go:embed autopatch.sh
-var autopatch string
+var autopatch []byte
 
 func installAutopatch(ctx context.Context) error {
 	k8s, err := getK8s()
@@ -136,7 +136,7 @@ func installAutopatch(ctx context.Context) error {
 	err = k8s.WriteFile(
 		fs.WithFileMode(ctx, 0755),
 		"/usr/local/bin/autopatch",
-		[]byte(autopatch),
+		autopatch,
 	)
 	if err != nil {
 		return fmt.Errorf("could not install autopatch: %w", err)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -30,10 +31,10 @@ func TestInstallAutopatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(/usr/local/bin/autopatch) err: %v", err)
 	}
-	if want := autopatch; string(got) != want {
+	if !bytes.Equal(got, autopatch) {
 		t.Errorf(
 			"ReadFile(/usr/local/bin/autopatch):\n%s",
-			cmp.Diff(want, string(got)),
+			cmp.Diff(autopatch, got),
 		)
 	}
 	info, err := sh.Stat(t.Context(), "/usr/local/bin/autopatch")
