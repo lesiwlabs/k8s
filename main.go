@@ -1,19 +1,94 @@
 package main
 
 import (
+	"context"
 	_ "embed"
+	"flag"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"sync"
 
-	"lesiw.io/cmdio"
+	"lesiw.io/command"
+	"lesiw.io/command/sub"
+	"lesiw.io/command/sys"
 	"lesiw.io/defers"
+	"lesiw.io/fs"
 )
 
 const host = "k8s.lesiw.dev"
 
-var rnr, k8s, ctl, spkez *cmdio.Runner
+var getSpkez = sync.OnceValues(func() (command.Machine, error) {
+	ctx := context.Background()
+	sh := command.Shell(sys.Machine())
+
+	// Register commands needed during initialization
+	sh.Handle("go", sh.Unshell())
+	sh.Handle("spkez", sh.Unshell())
+
+	// Check if spkez is installed; install if not found
+	_, err := sh.Call(ctx, "spkez", "--version")
+	if command.NotFound(err) {
+		fmt.Println("Installing spkez...")
+		err := sh.Exec(ctx, "go", "install", "lesiw.io/spkez@latest")
+		if err != nil {
+			return nil, fmt.Errorf("could not install spkez: %w", err)
+		}
+	} else if err != nil {
+		return nil, fmt.Errorf("error checking spkez: %w", err)
+	}
+
+	// spkez is just a command prefix, not a full shell
+	return sub.Machine(sh, "spkez"), nil
+})
+
+var getK8s = sync.OnceValues(func() (*command.Sh, error) {
+	ctx := context.Background()
+	sh := command.Shell(sys.Machine())
+	sh.Handle("ssh", sh.Unshell())
+
+	spkez, err := getSpkez()
+	if err != nil {
+		return nil, err
+	}
+
+	sshkey, err := command.Call(ctx, spkez, "get", "infra/ssh")
+	if err != nil {
+		return nil, fmt.Errorf("could not get ssh key: %w", err)
+	}
+	file, err := os.CreateTemp("", "sshkey")
+	if err != nil {
+		return nil, fmt.Errorf("could not create temp file: %w", err)
+	}
+	defers.Add(func() { _ = os.Remove(file.Name()) })
+	defer file.Close()
+	if err := os.Chmod(file.Name(), 0600); err != nil {
+		return nil, fmt.Errorf(
+			"could not set permissions on temp file: %w", err,
+		)
+	}
+	if _, err := file.WriteString(sshkey + "\n"); err != nil {
+		return nil, fmt.Errorf("could not write to temp file: %w", err)
+	}
+	sshkeyPath := file.Name()
+
+	k8s := command.Shell(sub.Machine(sh, "ssh", "-i", sshkeyPath, host, "--"))
+	k8s.Handle("sh", k8s.Unshell())
+	k8s.Handle("curl", k8s.Unshell())
+	k8s.Handle("kubectl", k8s.Unshell())
+	return k8s, nil
+})
+
+var getCtl = sync.OnceValues(func() (command.Machine, error) {
+	k8s, err := getK8s()
+	if err != nil {
+		return nil, err
+	}
+
+	// kubectl is just a command prefix, not a full shell
+	return sub.Machine(k8s, "kubectl"), nil
+})
 
 const autopatchCron = `0 2 * * 6 root /usr/local/bin/autopatch >> ` +
 	`/var/log/autopatch.log 2>&1
@@ -21,29 +96,37 @@ const autopatchCron = `0 2 * * 6 root /usr/local/bin/autopatch >> ` +
 
 func main() {
 	defer defers.Run()
-	if err := run(); err != nil {
+
+	verbose := flag.Bool("v", false, "enable verbose command tracing")
+	flag.Parse()
+
+	if *verbose {
+		command.Trace = command.ShTrace
+	}
+
+	if err := run(context.Background()); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		defers.Exit(1)
 	}
 }
 
-func run() error {
-	if err := installAutopatch(); err != nil {
+func run(ctx context.Context) error {
+	if err := installAutopatch(ctx); err != nil {
 		return err
 	}
-	if err := updateK3s(); err != nil {
+	if err := updateK3s(ctx); err != nil {
 		return fmt.Errorf("failed to install or update k3s: %w", err)
 	}
-	if err := setupTraefik(); err != nil {
+	if err := setupTraefik(ctx); err != nil {
 		return fmt.Errorf("failed to set up traefik: %w", err)
 	}
-	if err := setupPostgres(); err != nil {
+	if err := setupPostgres(ctx); err != nil {
 		return fmt.Errorf("failed to set up postgres: %w", err)
 	}
-	if err := setupCertManager(); err != nil {
+	if err := setupCertManager(ctx); err != nil {
 		return fmt.Errorf("failed to set up cert-manager: %w", err)
 	}
-	if err := setupContainerRegistry(); err != nil {
+	if err := setupContainerRegistry(ctx); err != nil {
 		return fmt.Errorf("failed to setup container registry: %w", err)
 	}
 	return nil
@@ -52,36 +135,38 @@ func run() error {
 //go:embed autopatch.sh
 var autopatch string
 
-func installAutopatch() error {
-	_, err := cmdio.GetPipe(
-		strings.NewReader(autopatch),
-		k8s.Command("tee", "/usr/local/bin/autopatch"),
+func installAutopatch(ctx context.Context) error {
+	k8s, err := getK8s()
+	if err != nil {
+		return err
+	}
+	err = k8s.WriteFile(
+		fs.WithFileMode(ctx, 0755),
+		"/usr/local/bin/autopatch",
+		[]byte(autopatch),
 	)
 	if err != nil {
 		return fmt.Errorf("could not install autopatch: %w", err)
 	}
-	_, err = cmdio.GetPipe(
-		strings.NewReader(autopatchCron),
-		k8s.Command("tee", "/etc/cron.d/autopatch"),
-	)
+	err = k8s.WriteFile(ctx, "/etc/cron.d/autopatch", []byte(autopatchCron))
 	if err != nil {
 		return fmt.Errorf("could not install autopatch cron job: %w", err)
 	}
-	err = k8s.Run("chmod", "+x", "/usr/local/bin/autopatch")
-	if err != nil {
-		return fmt.Errorf("could not mark autopatch as executable: %w", err)
-	}
-	err = k8s.Run("touch", "/var/log/autopatch.log")
+	err = k8s.WriteFile(ctx, "/var/log/autopatch.log", []byte{})
 	if err != nil {
 		return fmt.Errorf("could not create autopatch log: %w", err)
 	}
 	return nil
 }
 
-func updateK3s() error {
-	err := cmdio.Pipe(
-		k8s.Command("curl", "-sfL", "https://get.k3s.io"),
-		k8s.Command("sh", "-s", "-"),
+func updateK3s(ctx context.Context) error {
+	k8s, err := getK8s()
+	if err != nil {
+		return err
+	}
+	_, err = command.Copy(
+		k8s.Command(ctx, "sh", "-s", "-"),
+		k8s.Command(ctx, "curl", "-sfL", "https://get.k3s.io"),
 	)
 	if err != nil {
 		return fmt.Errorf("could not update k3s: %w", err)
@@ -92,24 +177,34 @@ func updateK3s() error {
 //go:embed traefik.yml
 var traefikConfig string
 
-func setupTraefik() error {
+func setupTraefik(ctx context.Context) error {
 	// k3s comes with traefik already installed.
 	// This function applies configuration to the existing installation.
-	err := cmdio.Pipe(
+	ctl, err := getCtl()
+	if err != nil {
+		return err
+	}
+	_, err = command.Copy(
+		ctl.Command(ctx, "apply", "-f", "-"),
 		strings.NewReader(traefikConfig),
-		ctl.Command("apply", "-f", "-"),
 	)
 	if err != nil {
 		return fmt.Errorf("could not configure traefik: %w", err)
 	}
-	return err
+	return nil
 }
 
 //go:embed cluster.yml
 var postgresClusterCfg string
 
-func setupPostgres() error {
-	err := ctl.Run(
+func setupPostgres(ctx context.Context) error {
+	ctl, err := getCtl()
+	if err != nil {
+		return err
+	}
+	err = command.Exec(
+		ctx,
+		ctl,
 		"apply",
 		"--server-side",     // github.com/cloudnative-pg/charts/issues/325
 		"--force-conflicts", // necessary to install over existing versions
@@ -120,9 +215,9 @@ func setupPostgres() error {
 	if err != nil {
 		return fmt.Errorf("could not install CNPG: %w", err)
 	}
-	err = cmdio.Pipe(
+	_, err = command.Copy(
+		ctl.Command(ctx, "apply", "-f", "-"),
 		strings.NewReader(postgresClusterCfg),
-		ctl.Command("apply", "-f", "-"),
 	)
 	if err != nil {
 		return fmt.Errorf("could not install PG cluster: %w", err)
@@ -141,8 +236,18 @@ stringData:
 //go:embed issuer.yml
 var issuerCfg string
 
-func setupCertManager() error {
-	err := ctl.Run(
+func setupCertManager(ctx context.Context) error {
+	ctl, err := getCtl()
+	if err != nil {
+		return err
+	}
+	spkez, err := getSpkez()
+	if err != nil {
+		return err
+	}
+	err = command.Exec(
+		ctx,
+		ctl,
 		"apply",
 		"-f",
 		"https://github.com/cert-manager/cert-manager/"+
@@ -151,22 +256,22 @@ func setupCertManager() error {
 	if err != nil {
 		return fmt.Errorf("could not install cert-manager: %w", err)
 	}
-	r, err := spkez.Get("get", "k8s/cert-manager/cloudflare")
+	r, err := command.Call(ctx, spkez, "get", "k8s/cert-manager/cloudflare")
 	if err != nil {
 		return fmt.Errorf("could not get cloudflare API key: %w", err)
 	}
-	err = cmdio.Pipe(
+	_, err = command.Copy(
+		ctl.Command(ctx, "apply", "-f", "-"),
 		strings.NewReader(fmt.Sprintf(
-			secretCfg, "cert-manager-cloudflare-token", "api-token", r.Out,
+			secretCfg, "cert-manager-cloudflare-token", "api-token", r,
 		)),
-		ctl.Command("apply", "-f", "-"),
 	)
 	if err != nil {
 		return fmt.Errorf("could not store cloudflare secret: %w", err)
 	}
-	err = cmdio.Pipe(
+	_, err = command.Copy(
+		ctl.Command(ctx, "apply", "-f", "-"),
 		strings.NewReader(issuerCfg),
-		ctl.Command("apply", "-f", "-"),
 	)
 	if err != nil {
 		return fmt.Errorf("could not create cloudflare issuer: %w", err)
@@ -186,35 +291,45 @@ stringData:
   username: %s
   password: %s`
 
-func setupContainerRegistry() error {
-	r, err := spkez.Get("get", "ctr.lesiw.dev/auth")
+func setupContainerRegistry(ctx context.Context) error {
+	ctl, err := getCtl()
+	if err != nil {
+		return err
+	}
+	spkez, err := getSpkez()
+	if err != nil {
+		return err
+	}
+	r, err := command.Call(ctx, spkez, "get", "ctr.lesiw.dev/auth")
 	if err != nil {
 		return fmt.Errorf("could not get registry auth secret: %w", err)
 	}
-	reguser, regpass := "ll", r.Out
-	err = cmdio.Pipe(
+	reguser, regpass := "ll", r
+	_, err = command.Copy(
+		ctl.Command(ctx, "apply", "-f", "-"),
 		strings.NewReader(fmt.Sprintf(
 			basicAuthCfg, "registry-auth-secret", reguser, regpass,
 		)),
-		ctl.Command("apply", "-f", "-"),
 	)
 	if err != nil {
 		return fmt.Errorf("could not store registry auth secret: %w", err)
 	}
-	err = cmdio.Pipe(
+	_, err = command.Copy(
+		ctl.Command(ctx, "apply", "-f", "-"),
 		strings.NewReader(registryCfg),
-		ctl.Command("apply", "-f", "-"),
 	)
 	if err != nil {
 		return fmt.Errorf("could not install registry: %w", err)
 	}
 
-	err = ctl.Run("get", "secret", "regcred")
+	err = command.Exec(ctx, ctl, "get", "secret", "regcred")
 	if err != nil {
-		trace := cmdio.Trace
-		defer func() { cmdio.Trace = trace }()
-		cmdio.Trace = io.Discard // Hide the registry secret.
-		err = ctl.Run(
+		trace := command.Trace
+		defer func() { command.Trace = trace }()
+		command.Trace = io.Discard // Hide the registry secret.
+		err = command.Exec(
+			ctx,
+			ctl,
 			"create", "secret", "docker-registry", "regcred",
 			"--docker-server=ctr.lesiw.dev",
 			"--docker-username="+reguser,
@@ -223,7 +338,7 @@ func setupContainerRegistry() error {
 		if err != nil {
 			return fmt.Errorf("could not store registry secret: %w", err)
 		}
-		cmdio.Trace = trace
+		command.Trace = trace
 	}
 	return nil
 }
